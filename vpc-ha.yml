@@ -1,0 +1,329 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: Cloud Stack
+Mappings:
+  SubnetConfig:
+    VPC:
+      CIDR: '10.0.0.0/16'
+    PublicOne:
+      CIDR: '10.0.0.0/24'
+    PublicTwo:
+      CIDR: '10.0.1.0/24'
+    PrivateOne:
+      CIDR: '10.0.2.0/24'
+    PrivateTwo:
+      CIDR: '10.0.3.0/24'
+  RegionMap: # TODO update to Amazon Linux 2 (don't forget to adjust awslogs config as well)
+    'af-south-1':
+      NATAMI: 'ami-03191ffc04c09514f'
+    'ap-east-1':
+      NATAMI: 'ami-2a89c85b'
+    'ap-northeast-1':
+      NATAMI: 'ami-0c8fbd0672a3f021c'
+    'ap-northeast-2':
+      NATAMI: 'ami-07f4ffea75c7825e2'
+    'ap-northeast-3':
+      NATAMI: 'ami-0b5fe8f6f5302c4e4'
+    'ap-south-1':
+      NATAMI: 'ami-0680a0c23d26f766e'
+    'ap-southeast-1':
+      NATAMI: 'ami-084ff3f032b1a4f4c'
+    'ap-southeast-2':
+      NATAMI: 'ami-09dba131bcfb36a0c'
+    'ca-central-1':
+      NATAMI: 'ami-03977296c09aceabb'
+    'eu-central-1':
+      NATAMI: 'ami-010b25fe48dd4b4d3'
+    'eu-north-1':
+      NATAMI: 'ami-018369841462be5c0'
+    'eu-south-1':
+      NATAMI: 'ami-06d462a8b9666b369'
+    'eu-west-1':
+      NATAMI: 'ami-01cce006e938f367e'
+    'eu-west-2':
+      NATAMI: 'ami-0f790c3802b657e9a'
+    'eu-west-3':
+      NATAMI: 'ami-000d84e1c6fd278b9'
+    'me-south-1':
+      NATAMI: 'ami-0402beae665795bf2'
+    'sa-east-1':
+      NATAMI: 'ami-00adef0c54d8d2f05'
+    'us-east-1':
+      NATAMI: 'ami-02623b65d521fbd30'
+    'us-east-2':
+      NATAMI: 'ami-07a77c0a7a953c61a'
+    'us-west-1':
+      NATAMI: 'ami-0416f13dfaede2198'
+    'us-west-2':
+      NATAMI: 'ami-093054b5d6d730040'
+    'us-gov-east-1':
+      NATAMI: 'ami-549b7425'
+    'us-gov-west-1':
+      NATAMI: 'ami-880a36e9'
+    'cn-north-1':
+      NATAMI: 'ami-0b7fb8b8848deff78'
+    'cn-northwest-1':
+      NATAMI: 'ami-040e9564a5d3b3f22'
+Resources:
+  # VPC in which containers will be networked.
+  # It has two public subnets, and two private subnets.
+  # We distribute the subnets across the first two available subnets
+  # for the region, for high availability.
+  VPC:
+    Type: AWS::EC2::VPC
+    Properties:
+      EnableDnsSupport: true
+      EnableDnsHostnames: true
+      CidrBlock: !FindInMap ['SubnetConfig', 'VPC', 'CIDR']
+      Tags:
+        - Key: Name
+          Value: !Sub "${AWS::StackName}-VPC"
+  # Two public subnets, where containers can have public IP addresses
+  PublicSubnetOne:
+    Type: AWS::EC2::Subnet
+    Properties:
+      AvailabilityZone:
+        Fn::Select:
+          - 0
+          - Fn::GetAZs: {Ref: 'AWS::Region'}
+      VpcId: !Ref 'VPC'
+      CidrBlock: !FindInMap ['SubnetConfig', 'PublicOne', 'CIDR']
+      MapPublicIpOnLaunch: true
+      Tags:
+        - Key: Name
+          Value: !Sub "${AWS::StackName}-PublicSubnetOne"
+  PublicSubnetTwo:
+    Type: AWS::EC2::Subnet
+    Properties:
+      AvailabilityZone:
+        Fn::Select:
+          - 1
+          - Fn::GetAZs: {Ref: 'AWS::Region'}
+      VpcId: !Ref 'VPC'
+      CidrBlock: !FindInMap ['SubnetConfig', 'PublicTwo', 'CIDR']
+      MapPublicIpOnLaunch: true
+      Tags:
+        - Key: Name
+          Value: !Sub "${AWS::StackName}-PublicSubnetTwo"
+
+  # Two private subnets where containers will only have private
+  # IP addresses, and will only be reachable by other members of the
+  # VPC
+  PrivateSubnetOne:
+    Type: AWS::EC2::Subnet
+    Properties:
+      AvailabilityZone:
+        Fn::Select:
+          - 0
+          - Fn::GetAZs: {Ref: 'AWS::Region'}
+      VpcId: !Ref 'VPC'
+      CidrBlock: !FindInMap ['SubnetConfig', 'PrivateOne', 'CIDR']
+      Tags:
+        - Key: Name
+          Value: !Sub "${AWS::StackName}-PrivateSubnetOne"
+  PrivateSubnetTwo:
+    Type: AWS::EC2::Subnet
+    Properties:
+      AvailabilityZone:
+        Fn::Select:
+          - 1
+          - Fn::GetAZs: {Ref: 'AWS::Region'}
+      VpcId: !Ref 'VPC'
+      CidrBlock: !FindInMap ['SubnetConfig', 'PrivateTwo', 'CIDR']
+      Tags:
+        - Key: Name
+          Value: !Sub "${AWS::StackName}-PrivateSubnetTwo"
+
+  # Setup networking resources for the public subnets. Containers
+  # in the public subnets have public IP addresses and the routing table
+  # sends network traffic via the internet gateway.
+  InternetGateway:
+    Type: AWS::EC2::InternetGateway
+    Properties:
+      Tags:
+        - Key: Name
+          Value: !Sub "${AWS::StackName}-InternetGateway"
+  GatewayAttachement:
+    Type: AWS::EC2::VPCGatewayAttachment
+    Properties:
+      VpcId: !Ref 'VPC'
+      InternetGatewayId: !Ref 'InternetGateway'
+  PublicRouteTable:
+    Type: AWS::EC2::RouteTable
+    Properties:
+      VpcId: !Ref 'VPC'
+      Tags:
+        - Key: Name
+          Value: !Sub "${AWS::StackName}-PublicRouteTable"
+  PublicRoute:
+    Type: AWS::EC2::Route
+    DependsOn: GatewayAttachement
+    Properties:
+      RouteTableId: !Ref 'PublicRouteTable'
+      DestinationCidrBlock: '0.0.0.0/0'
+      GatewayId: !Ref 'InternetGateway'
+  PublicSubnetOneRouteTableAssociation:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      SubnetId: !Ref PublicSubnetOne
+      RouteTableId: !Ref PublicRouteTable
+  PublicSubnetTwoRouteTableAssociation:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      SubnetId: !Ref PublicSubnetTwo
+      RouteTableId: !Ref PublicRouteTable
+
+  # Setup networking resources for the private subnets. Containers
+  # in these subnets have only private IP addresses, and must use a NAT
+  # gateway to talk to the internet. We launch two NAT gateways, one for
+  # each private subnet.
+  NatGatewayOneEIP:
+    Type: AWS::EC2::EIP
+    Properties:
+      Domain: vpc
+      InstanceId: !Ref NatGatewayOne
+      Tags:
+        - Key: Name
+          Value: !Sub "${AWS::StackName}-NatGatewayOneEIP"
+  NatGatewayTwoEIP:
+    Type: AWS::EC2::EIP
+    Properties:
+      Domain: vpc
+      InstanceId: !Ref NatGatewayTwo
+      Tags:
+        - Key: Name
+          Value: !Sub "${AWS::StackName}-NatGatewayTwoEIP"
+  NatGatewayOne:
+    Type: AWS::EC2::Instance
+    DependsOn: GatewayAttachement
+    Properties:
+      AvailabilityZone:
+        Fn::Select:
+          - 0
+          - Fn::GetAZs: {Ref: 'AWS::Region'}
+      ImageId: !FindInMap [RegionMap, !Ref 'AWS::Region', NATAMI]
+      InstanceType: t3a.nano
+      NetworkInterfaces:
+        - GroupSet:
+            - !GetAtt VPC.DefaultSecurityGroup
+          AssociatePublicIpAddress: true
+          DeviceIndex: 0
+          DeleteOnTermination: true
+          SubnetId: !Ref PublicSubnetOne
+      SourceDestCheck: false
+      Tags:
+        - Key: Name
+          Value: !Sub "${AWS::StackName}-NatGatewayOne"
+  NatGatewayTwo:
+    Type: AWS::EC2::Instance
+    DependsOn: GatewayAttachement
+    Properties:
+      AvailabilityZone:
+        Fn::Select:
+          - 1
+          - Fn::GetAZs: {Ref: 'AWS::Region'}
+      ImageId: !FindInMap [RegionMap, !Ref 'AWS::Region', NATAMI]
+      InstanceType: t3a.nano
+      NetworkInterfaces:
+        - GroupSet:
+            - !GetAtt VPC.DefaultSecurityGroup
+          AssociatePublicIpAddress: true
+          DeviceIndex: 0
+          DeleteOnTermination: true
+          SubnetId: !Ref PublicSubnetTwo
+      SourceDestCheck: false
+      Tags:
+        - Key: Name
+          Value: !Sub "${AWS::StackName}-NatGatewayTwo"
+  PrivateRouteOne:
+    Type: AWS::EC2::Route
+    Properties:
+      RouteTableId:
+        Ref: PrivateRouteTableOne
+      DestinationCidrBlock: '0.0.0.0/0'
+      InstanceId:
+        Ref: NatGatewayOne
+  PrivateRouteTwo:
+    Type: AWS::EC2::Route
+    Properties:
+      RouteTableId:
+        Ref: PrivateRouteTableTwo
+      DestinationCidrBlock: '0.0.0.0/0'
+      InstanceId:
+        Ref: NatGatewayTwo
+  PrivateRouteTableOne:
+    Type: AWS::EC2::RouteTable
+    Properties:
+      VpcId: !Ref VPC
+      Tags:
+        - Key: Name
+          Value: !Sub "${AWS::StackName}-PrivateRouteTableOne"
+  PrivateRouteTableOneAssociation:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      RouteTableId: !Ref PrivateRouteTableOne
+      SubnetId: !Ref PrivateSubnetOne
+  PrivateRouteTableTwo:
+    Type: AWS::EC2::RouteTable
+    Properties:
+      VpcId: !Ref VPC
+      Tags:
+        - Key: Name
+          Value: !Sub "${AWS::StackName}-PrivateRouteTableTwo"
+  PrivateRouteTableTwoAssociation:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      RouteTableId: !Ref PrivateRouteTableTwo
+      SubnetId: !Ref PrivateSubnetTwo
+  PrivateLoadBalancer:
+    Type: AWS::ElasticLoadBalancingV2::LoadBalancer
+    Properties:
+      Name: !Sub "${AWS::StackName}-private-lb"
+      Type: application
+      Scheme: internal
+      Subnets:
+        - !Ref PrivateSubnetOne
+        - !Ref PrivateSubnetTwo
+  PublicLoadBalancer:
+    Type: AWS::ElasticLoadBalancingV2::LoadBalancer
+    Properties:
+      Name: !Sub "${AWS::StackName}-public-lb"
+      Type: application
+      Subnets:
+        - !Ref PublicSubnetOne
+        - !Ref PublicSubnetTwo
+Outputs:
+  StackVPC:
+    Description: The ID of the VPC
+    Value: !Ref VPC
+    Export:
+      Name: !Sub "${AWS::StackName}-VPCID"
+  PublicSubnetOneID:
+    Description: The ID of the PublicSubnetOne
+    Value: !Ref PublicSubnetOne
+    Export:
+      Name: !Sub "${AWS::StackName}-PublicSubnetOneID"
+  PublicSubnetTwoID:
+    Description: The ID of the PublicSubnetTwo
+    Value: !Ref PublicSubnetTwo
+    Export:
+      Name: !Sub "${AWS::StackName}-PublicSubnetTwoID"
+  PrivateSubnetOneID:
+    Description: The ID of the PrivateSubnetOne
+    Value: !Ref PrivateSubnetOne
+    Export:
+      Name: !Sub "${AWS::StackName}-PrivateSubnetOneID"
+  PrivateSubnetTwoID:
+    Description: The ID of the PrivateSubnetTwo
+    Value: !Ref PrivateSubnetTwo
+    Export:
+      Name: !Sub "${AWS::StackName}-PrivateSubnetTwoID"
+  PrivateLoadBalancerHostName:
+    Description: The HostName of the PrivateLoadBalancer
+    Value: !GetAtt PrivateLoadBalancer.DNSName
+    Export:
+      Name: !Sub "${AWS::StackName}-PrivateLoadBalancerDNSName"
+  PublicLoadBalancerHostName:
+    Description: The HostName of the PublicLoadBalancer
+    Value: !GetAtt PublicLoadBalancer.DNSName
+    Export:
+      Name: !Sub "${AWS::StackName}-PublicLoadBalancerDNSName"
